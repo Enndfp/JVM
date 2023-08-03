@@ -552,3 +552,136 @@ public class Demo11 {
 
 - 调整 -XX:StringTableSize=桶个数
 - 考虑将字符串对象入池
+
+### 7.直接内存
+
+#### 7.1 定义
+
+Direct Memory 
+
+- 常见于 NIO 操作时，用于数据缓冲区 
+- 分配回收成本较高，但读写性能高 
+- 不受 JVM 内存回收管理
+
+#### 7.2 ByteBuffer
+
+使用ByteBuffer比使用io的性能更高
+
+![image-20230803093324277](https://img.enndfp.cn/image-20230803093324277.png)
+
+在没有用ByteBuffer时，系统的内部操作如下图
+
+![image-20230803093428556](https://img.enndfp.cn/image-20230803093428556.png)
+
+使用了直接内存后，系统内部操作如下图。不再需要经过系统缓存区传给java缓冲区，他们**共同划出一块缓冲区**，java代码和系统都可以直接访问，大大的提升了效率。少了缓冲区的复制操作。
+
+![image-20230803093624039](https://img.enndfp.cn/image-20230803093624039.png)
+
+#### 7.3 直接内存释放原理
+
+直接内存的回收不是通过JVM的垃圾回收来释放的，而是拿到**Unsafe**对象，然后调用去分配和调用内存
+
+```java
+/**
+ * 演示直接内存释放原理 Unsafe对象
+ *
+ * @author Enndfp
+ */
+public class Demo12 {
+    public static int _1Gb = 1024 * 1024 * 1024;
+
+    public static void main(String[] args) throws IOException {
+        Unsafe unsafe = getUnsafe();
+        long base = unsafe.allocateMemory(_1Gb);
+        unsafe.setMemory(base, _1Gb, (byte) 0);
+        System.in.read();
+
+        unsafe.freeMemory(base);
+        System.in.read();
+    }
+    public static Unsafe getUnsafe() {
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            Unsafe unsafe = (Unsafe) f.get(null);
+            return unsafe;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+
+#### 7.4 分配与回收的原理
+
+- 使用了`Unsafe` 对象完成直接内存的分配回收，并主动回收需要主动调用`freeMemory`方法
+- `ByteBuffer`的实现类内部，使用了`Cleaner` (虚引用) 来监测`ByteBuffer`对象，一旦`ByteBuffer`对象被垃圾回收，那么就会由`ReferenceHandler`线程通过`Cleaner`的`create`方法调用`freeMemory`来释放直接内存
+
+![image-20230803095315645](https://img.enndfp.cn/image-20230803095315645.png)
+
+![image-20230803095351774](https://img.enndfp.cn/image-20230803095351774.png)
+
+## 三、垃圾回收
+
+### 1.如何判断对象可以回收
+
+#### 1.1 引用计数法
+
+##### 1.1.1 定义
+
+在对象中添加一个引用计数器，每当有一个地方引用它时，计数器值就加一；当引用失效时，计数器值就减一；任何时刻计数器为零的对象就是不可能再被使用的
+
+##### 1.1.2 弊端
+
+![image-20230803112136064](https://img.enndfp.cn/image-20230803112136064.png)
+
+ 循环引用，A对象引用B对象，B对象引用计数+1，B对象引用A，A对象引用计数+1。当没有谁再引用他们，他们不能被垃圾回收，因为引用计数没有归零。python在早期垃圾回收用的引用计数法。
+
+#### 1.2 可达性分析算法
+
+##### 1.2.1 定义
+
+- java虚拟机中的垃圾回收器采用的是可达性分析算法（Reachability Analysis）
+- **扫描堆中的对象，看是否能够沿着GC Root(根对象) 为起点的引用链找到该对象，找不到就可以进行垃圾回收**
+
+![image-20230803112750525](https://img.enndfp.cn/image-20230803112750525.png)
+
+##### 1.2.2 GC Root对象分类
+
+- 在虚拟机栈（栈帧中的本地变量表）中引用的对象，譬如各个线程被调用的方法堆栈中使用到的参数、局部变量、临时变量等。 
+- 在方法区中类静态属性引用的对象，譬如Java类的引用类型静态变量（一般指被static修饰的对象，加载类的时候就加载到内存中）
+- 在方法区中常量引用的对象，譬如字符串常量池（String Table）里的引用。 
+- 在本地方法栈中JNI（即通常所说的Native方法）引用的对象。
+- Java虚拟机内部的引用，如基本数据类型对应的Class对象，一些常驻的异常对象（比如 NullPointExcepiton、OutOfMemoryError）等，还有系统类加载器。 
+- 所有被同步锁（synchronized关键字）持有的对象。 
+- 反映Java虚拟机内部情况的JMXBean、JVMTI中注册的回调、本地代码缓存等。
+
+#### 1.3 五种引用
+
+![image-20230803114618877](https://img.enndfp.cn/image-20230803114618877.png)
+
+##### 1.3.1 强引用（Strong Reference）
+
+- 无论任何情况下，即使系统内存不足，只要强引用关系还存在，垃圾收集器就永远不会回收掉被引用的对象。
+
+##### 1.3.2 软引用（Soft Reference）
+
+- 软引用是用来描述一些还有用，但非必须的对象。
+  - 仅有软引用引用该对象时，在垃圾回收后，**内存仍不足时**会再次出发垃圾回收，回收软引用对象 
+  - 可以配合引用队列来释放软引用自身
+
+##### 1.3.3 弱引用（Weak Reference）
+
+- 弱引用也是用来描述那些非必须对象
+  - 仅有弱引用引用该对象时，在垃圾回收时，**无论内存是否充足**，都会回收弱引用对象 
+  - 可以配合引用队列来释放弱引用自身
+
+##### 1.3.4 虚引用（Phantom Reference）
+
+- 虚引用也称为“幽灵引用”或者“幻影引用”，它是最弱的一种引用关系。
+  - 必须配合引用队列使用，主要配合 ByteBuffer 使用，被引用对象回收时，会将虚引用入队， 由 Reference Handler 线程调用虚引用相关方法释放直接内存
+
+##### 1.3.5 终结器引用（Final Reference）
+
+- 无需手动编码，但其内部配合引用队列使用，在垃圾回收时，终结器引用入队（被引用对象暂时没有被回收），再由 Finalizer 线程通过终结器引用找到被引用对象并调用它的 finalize 方法，第二次 GC 时才能回收被引用对象
+
