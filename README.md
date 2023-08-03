@@ -615,7 +615,7 @@ public class Demo12 {
 #### 7.4 分配与回收的原理
 
 - 使用了`Unsafe` 对象完成直接内存的分配回收，并主动回收需要主动调用`freeMemory`方法
-- `ByteBuffer`的实现类内部，使用了`Cleaner` (虚引用) 来监测`ByteBuffer`对象，一旦`ByteBuffer`对象被垃圾回收，那么就会由`ReferenceHandler`线程通过`Cleaner`的`create`方法调用`freeMemory`来释放直接内存
+- `ByteBuffer`的实现类内部，使用了`Cleaner` (虚引用) 来监测`ByteBuffer`对象，一旦`ByteBuffer`对象被垃圾回收，那么就会由`ReferenceHandler`线程通过`Cleaner`的`clean`方法调用`freeMemory`来释放直接内存
 
 ![image-20230803095315645](https://img.enndfp.cn/image-20230803095315645.png)
 
@@ -685,3 +685,46 @@ public class Demo12 {
 
 - 无需手动编码，但其内部配合引用队列使用，在垃圾回收时，终结器引用入队（被引用对象暂时没有被回收），再由 Finalizer 线程通过终结器引用找到被引用对象并调用它的 finalize 方法，第二次 GC 时才能回收被引用对象
 
+##### 1.3.6 示例代码
+
+```java
+/**
+ * 演示软引用，配合引用队列
+ * -Xmx20m
+ *
+ * @author Enndfp
+ */
+public class Demo2 {
+    private static final int _4MB = 4 * 1024 * 1024;
+
+    public static void main(String[] args) {
+        List<SoftReference<byte[]>> list = new ArrayList<>();
+
+        // 引用队列
+        ReferenceQueue<byte[]> queue = new ReferenceQueue<>();
+
+        for (int i = 0; i < 5; i++) {
+            // 关联了引用队列，当软引用所关联的 byte[] 被回收时，软引用自己会加到 queue 中
+            SoftReference<byte[]> ref = new SoftReference<>(new byte[_4MB], queue);
+            System.out.println(ref.get());
+            list.add(ref);
+            System.out.println(list.size());
+        }
+
+        // 从队列中获取无用的软引用对象，并移除
+        Reference<? extends byte[]> poll = queue.poll();
+        while (poll != null) {
+            list.remove(poll);
+            poll = queue.poll();
+        }
+
+        System.out.println("===========================");
+        for (SoftReference<byte[]> ref : list) {
+            System.out.println(ref.get());
+        }
+
+    }
+}
+```
+
+**弱引用的使用和软引用类似**，只是将 **SoftReference 换为了 WeakReference**
