@@ -727,7 +727,7 @@ public class Demo2 {
 }
 ```
 
-**弱引用的使用和软引用类似**，只是将 **SoftReference 换为了 WeakReference**
+**弱引用的使用和软引用类似**，只是将 **SoftReference** 换为了 **WeakReference**
 
 ### 2.垃圾回收算法
 
@@ -949,3 +949,286 @@ Concurrent Mark Sweep，一种以获取**最短回收停顿时间**为目标的*
 - **并发清除**：对没有标记的对象进行清除回收
 
 **CMS收集器**的**内存回收过程**是与**用户线程**一起**并发执行**的
+
+#### 4.5 Garbage First收集器
+
+##### 4.5.1 定义
+
+Garbage First（简称G1）收集器是垃圾收集器技术发展历史上的里程碑式的成果，它开创了收集器面向局部收集的设计思路和基于Region的内存布局形式。
+
+- 2004年论文发布
+- 2009 JDK 6u14体验
+- 2012 JDK 7u4官方支持
+- 2017 JDK 9 默认
+
+---
+
+##### 4.5.2 使用场景
+
+- 同时注重吞吐量（Throughput）和低延迟（Low latency)，默认的暂停时间是200ms。
+- 超大堆内存，会将堆划分为多个等大的Region。
+- **整体上是标记 - 整理算法**，**两个Region（区域）之间是复制算法**。
+
+---
+
+##### 4.5.3 相关JVM参数
+
+```bash
+-XX:+UserG1GC
+-XX:G1HeapRegionSize=size
+-XX:MaxGCPauseMillis=time
+```
+
+第一个参数：开启G1
+第二个参数：设置Region大小，取值范围为1MB～32MB，且应为2的N次幂
+第三个参数：设置暂停时间ms
+
+---
+
+##### 4.5.4 G1垃圾回收阶段
+
+![image-20230805110809450](https://img.enndfp.cn/image-20230805110809450.png)
+
+第一阶段对新生代进行收集（Young Collection），第二阶段对新生代的收集同时会执行并发标记（Young Collection+ Concurrent Mark） ，第三阶段对新生代、新生代幸存区和老年区进行混合收集（Mixed Collection），以此循环。
+
+Garbage First 将堆划分大小相等的一个个区域，**每个区域都可以作为新生代、幸存区和老年代。**
+
+- E 代表伊甸园区域
+- S 代表幸存区
+- O 代表老年代
+
+1. **Young Collection(新生代收集)**
+
+![image-20230805111121585](https://img.enndfp.cn/image-20230805111121585.png)
+
+- 会STW（Stop The World），但相对于时间还是比较短的
+
+![image-20230805111316066](https://img.enndfp.cn/image-20230805111316066.png)
+
+- 新生代垃圾回收会将幸存对象以复制算法复制到幸存区
+
+![image-20230805111437742](https://img.enndfp.cn/image-20230805111437742.png)
+
+- 新生代垃圾回收会将幸存对象以复制算法复制到幸存区，幸存区存活的对象达到阈值后会以转发复制的方式进入老年代
+
+2. **Young Collection+ Concurrent Mark(新生代收集+并发标记)**
+
+初始标记：找到GC Root（根对象）
+并发标记：和用户线程并发执行，针对区域内所有的存活对象进行标记
+
+- 在**Young GC时**会进行GC Root的**初始标记 **
+- **老年代占用堆空间比例达到阈值时**，进行**并发标记**（不会STW),由下面的JVM参数决定
+
+```bash
+-XX:InitiatingHeapOccupancyPercent=percent   (默认45%)
+```
+
+![image-20230805112537224](https://img.enndfp.cn/image-20230805112537224.png)
+
+- 当O占到45%就进行并发标记了
+
+​	3.**Mixed Collection(混合收集)**
+
+会对 E、S、O进行全面垃圾回收
+
+**最终标记**：在并发标记的过程中，可能会漏掉一些对象，因为并发标记的同时，其他用户线程还在工作，产生一些垃圾，所以进行最终标记。清理没被标记的对象
+
+- 最终标记（Remark）会STW
+- **拷贝存活**（Evacuation）会STW
+
+```bash
+-XX:MaxGCPauseMillis=ms
+```
+
+![image-20230805113313962](https://img.enndfp.cn/image-20230805113313962.png)
+
+- 在进行混合回收时，新生代垃圾回收会将幸存对象以复制算法复制到幸存区，幸存区存活的对象达到阈值后会以转发复制的方式进入老年代，老年代中根据最大暂停时间有选择的进行回收，优先处理回收价值收益最大的那些Region，将老年代中存活下来的对象以复制算法重新赋值到一个新的老年代中
+
+---
+
+##### 4.5.5 Full GC触发条件
+
+![image-20230805114254454](https://img.enndfp.cn/image-20230805114254454.png)
+
+**1.** **调用** **System.gc()**
+
+只是建议虚拟机执行 Full GC，但是虚拟机不一定真正去执行。不建议使用这种方式，而是让虚拟机管理内存。
+
+**2. 未指定老年代和新生代大小，堆伸缩时会产生Full GC,所以一定要配置-Xms、-Xmx**
+
+**3.** **老年代空间不足**
+
+老年代空间不足的常见场景比如大对象、大数组直接进入老年代、长期存活的对象进入老年代等。
+
+为了避免以上原因引起的 Full GC，应当尽量不要创建过大的对象以及数组。
+
+除此之外，可以通过 -Xmn 虚拟机参数调大新生代的大小，让对象尽量在新生代被回收掉，不进入老年代。
+
+还可以通过 -XX:MaxTenuringThreshold 调大对象进入老年代的年龄，让对象在新生代多存活一段时间。
+
+在执行Full GC后空间仍然不足，则抛出错误：<font color=red>java.lang.OutOfMemoryError: Java heap space</font>
+
+**4. 空间分配担保失败**
+
+空间担保，下面两种情况是空间担保失败：
+
+1、每次晋升的对象的平均大小 > 老年代剩余空间
+
+2、Minor GC后存活的对象超过了老年代剩余空间
+
+注意GC日志中是否有`promotion failed`和`concurrent mode failure`两种状况，当出现这两种状况的时候就有可能会触发Full GC。
+
+- promotion failed 是在进行 Minor GC时候，survivor space空间放不下只能晋升老年代，而此时老年代也空间不足时发生的。
+
+- concurrent mode failure 是在进行CMS GC过程，此时有对象要放入老年代而空间不足造成的，这种情况下会退化使用Serial Old收集器变成单线程的，此时是相当的慢的。
+
+**5. JDK 1.7 及以前的（永久代）空间满**
+
+在 JDK 1.7 及以前，HotSpot 虚拟机中的方法区是用永久代实现的，永久代中存放的为一些 Class 的信息、常量、静态变量等数据。
+
+当系统中要加载的类、反射的类和调用的方法较多时，永久代可能会被占满，在未配置为采用 CMS GC 的情况下也会执行 Full GC。
+
+如果经过 Full GC 仍然回收不了，那么虚拟机会抛出：<font color=red>java.lang.OutOfMemoryError: PermGen space</font>
+
+为避免以上原因引起的 Full GC，可采用的方法为增大Perm Gen或转为使用 CMS GC。
+
+------
+
+**空间分配担保补充：**
+
+**在发生Minor GC之前，虚拟机必须先检查老年代最大可用的连续空间是否大于新生代所有对象总空间，如果这个条件成立，那这一次Minor GC可以确保是安全的。如果不成立，则虚拟机会先查看-XX：HandlePromotionFailure参数的设置值是否允许担保失败（Handle Promotion Failure）；如果允许，那会继续检查老年代最大可用的连续空间是否大于历次晋升到老年代对象的平均大小，如果大于，将尝试进行一次Minor GC，尽管这次Minor GC是有风险的；如果小于，或者-XX： HandlePromotionFailure设置不允许冒险，那这时就要改为进行一次Full GC。**
+
+---
+
+##### 4.5.6 Young Collection 跨代引用
+
+- 卡表与Remembered Set（记忆集）
+  - **Remembered Set**存在于**E**中，**用于保存新生代对象对应的脏卡**
+    - 脏卡: 老年代被划分为多个区域(一个区域512K)，如果该
+      区域引用了新生代对象，则该区域被称为**脏卡**
+
+- 在引用变更时通过post-write barried（写屏障） + dirty card queue（脏卡队列）
+- concurrent refinement threads更新Remembered Set
+- 新生代回收的跨代引用（老年代引用新生代）问题
+
+![image-20230805194743404](https://img.enndfp.cn/image-20230805194743404.png)
+
+在进行新生代回收时要找到GC Root根对象。有一部分GC Root对象是来自老年代，老年代存活的对象很多，如果遍历老年代找根对象效率非常低，采用**卡表**（Card Table)的技术，将老年代分成一个个Card,每个Card差不多512k， 老年代其中一个对象引用了新生代对象，那么就称这个Card为**脏卡**（dirty card)
+
+![image-20230805194914288](https://img.enndfp.cn/image-20230805194914288.png)
+
+将来进行垃圾回收时不需要找整个老年代，只需要找脏卡区就行了
+
+---
+
+##### 4.5.7 Remark（重新标记）
+
+```bash
+pre-write barrier + satb_mark_queue
+```
+
+在垃圾回收时，收集器处理对象的过程中
+
+- 黑色：已被处理，需要保留的
+- 灰色：正在处理中的
+- 白色：还未处理的
+
+![image-20230805195634265](https://img.enndfp.cn/image-20230805195634265.png)
+
+但是在**并发标记过程中**，有可能A已经被处理了还没有引用C，但该处理过程还未结束，在处理过程结束之前A引用了C，这时就会用到remark过程如下：
+
+- 之前C未被引用，这时A引用了C，就会给C加一个写屏障，写屏障的指令会被执行，将C放入一个队列当中，并将C变为处理中状态
+- 在**并发标记**阶段结束以后，重新标记阶段会STW，然后将放在该队列中的对象重新处理，发现有强引用引用它，就会处理它
+
+![image-20230805200931536](https://img.enndfp.cn/image-20230805200931536.png)
+
+---
+
+##### 4.5.8 JDK 8u20 字符串去重
+
+- 优点：节省大量内存 
+- 缺点：略微多占用了 cpu 时间，新生代回收时间略微增加
+
+```bash
+-XX:+UseStringDeduplication		#打开开关
+```
+
+- 将所有新分配的字符串放入一个队列
+- 当新生代回收时，G1并发检查是否有字符串重复 
+- 如果它们值一样，让它们引用同一个 char[] 
+- 注意，与 `String.intern() `不一样
+  - `String.intern()` 关注的是字符串对象 
+  - 而字符串去重关注的是 char[]
+  - 在 JVM 内部，使用了不同的字符串表
+
+---
+
+##### 4.5.9 JDK 8u40 并发标记类卸载
+
+所有对象都经过并发标记后，就能知道哪些类不再被使用，当一个类加载器的所有类都不再使用，则卸 载它所加载的所有类
+
+`-XX:+ClassUnloadingWithConcurrentMark` 默认启用
+
+---
+
+##### 4.5.10 JDK 8u60 回收巨型对象
+
+- 一个对象大于region的一半时，就称为巨型对象
+- G1不会对巨型对象进行拷贝
+- 回收时被优先考虑
+- G1会跟踪老年代所有incoming引用，如果老年代incoming引用为0的巨型对象就可以在新生代垃圾回收时处理掉
+
+![image-20230805202907119](https://img.enndfp.cn/image-20230805202907119.png)
+
+---
+
+##### 4.5.11 JDK 9并发标记起始时间的调整
+
+- 并发标记必须在堆空间占满前完成，否则退化为 FullGC
+- JDK9之前需要使用`-XX:InitiatingHeapOccupancyPercent`
+- JDK9可以动态调整
+  - `-XX:InitiatingHeapoccupancyPercent` 用来设置初始值，默认45%
+  - 进行数据采样并动态调整
+  - 总会添加一个安全的空档空间
+
+### 5.垃圾回收调优
+
+查看虚拟机运行参数
+
+```bash
+"D:\product\java\java8\bin\java" -XX:+PrintFlagsFinal -version | findstr "GC"
+```
+
+#### 5.1 调优领域
+
+- 内存
+- 锁竞争
+- CPU 占用
+- IO
+
+#### 5.2 确定目标
+
+- 【低延迟】还是【高吞吐量】，选择合适的回收器 
+
+- CMS，G1，ZGC
+- ParallelGC 
+- Zing
+
+#### 5.3 最快的 GC
+
+答案是不发生 GC
+
+- 查看 FullGC 前后的内存占用，考虑下面几个问题
+  - 数据是不是太多？
+    - resultSet = statement.executeQuery("select * from 大表 limit n")
+  - 数据表示是否太臃肿？
+    - 对象图
+    - 对象大小 16 Integer 24  int 4
+  - 是否存在内存泄漏？
+    - static Map map =
+    - 软
+    - 弱
+    - 第三方缓存实现
+
+#### 5.4 新生代调优
+
