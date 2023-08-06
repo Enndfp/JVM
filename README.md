@@ -1232,3 +1232,114 @@ pre-write barrier + satb_mark_queue
 
 #### 5.4 新生代调优
 
+新生代的特点
+
+- 所有new操作的内存分配非常廉价
+  - TLAB   Thread-local Allocation Buffer
+- 死亡对象的回收代价是零
+- 大部分对象用过即死
+- Minor GC 的时间远远低于 Full GC
+
+调优参数：<font color='red'>`-Xmn`</font>设置新生代的大小
+
+**设置越大越好吗？**
+
+不是，官方说明如下：
+
+![image-20230806111700820](https://img.enndfp.cn/image-20230806111700820.png)
+
+- 新生代内存太小：频繁触发 `Minor GC` ，`Minor GC`会 `stop the world`暂停 ，会使得吞吐量下降
+
+- 新生代内存太大：老年代内存占比有所降低，会更频繁地触发 `Full GC`。而且触发 `Minor GC `时，清理新生代所花费的时间会更长
+
+<mark>oracle建议你的新生代内存大于整个堆的25%。小于堆的50%</mark>
+
+调优要考虑的条件：
+
+- 新生代能容纳所有【并发量 * (请求-响应)】的数据
+- 幸存区大到能保留【当前活跃对象+需要晋升对象】
+- 晋升阈值配置得当，让长时间存活对象尽快晋升
+  - 调整最大晋升阈值：`-XX:MaxTenuringThreshold=threshold`
+  - 垃圾回收时打印存活对象详情：`-XX:+PrintTenuringDistribution`
+
+#### 5.5 老年代调优
+
+以 CMS 为例：
+
+- CMS 的老年代内存越大越好
+- 先尝试不做调优，如果没有 Full GC 那么已经…，否则先尝试调优新生代
+- 观察发生 Full GC 时老年代内存占用，将老年代内存预设调大 1/4 ~ 1/3
+  - 老年代空间占用达到多少比例时触发垃圾回收参数：`-XX:CMSInitiatingOccupancyFraction=percent`
+
+#### 5.6 案例
+
+- **案例1：Full GC 和Minor GC 频繁**
+
+说明空间紧张，如果是新生代空间紧张，当业务高峰期来了，大量对象被创建，很快新生代空间满，会经常Minor GC，而原本很多生存周期短的对象也会被晋升到老年代，老年代存了大量的生存周期短的对象，导致频繁触发Full GC,所以应该先调整新生代的内存空间大一点，让对象尽可能的在新生代
+
+- 
+
+- **案例2：请求高峰期发生Full GC，单次暂停时间特别长。（CMS）**
+
+分析在哪一部分耗时较长，通过查看GC日志，比较慢的通常会是在重新标记阶段，重新标记会扫描整个堆内存，根据对象找引用，所以解决办法是在重新标记之前，先在新生代进行垃圾回收，这样就会减少重新标记的耗时时间，通过 `-XX:+CMSScavengeBeforeRemark `参数在重新标记之前进行垃圾回收
+
+## 四、类加载
+
+### 1.类文件结构
+
+根据 JVM 规范，类文件结构如下：
+
+```java
+ClassFile {
+	u4 			   magic;
+	u2 			   minor_version;
+	u2 			   major_version;
+	u2 			   constant_pool_count;
+	cp_info 	   constant_pool[constant_pool_count-1];
+	u2 			   access_flags;
+	u2 			   this_class;
+	u2             super_class;
+	u2             interfaces_count;
+	u2             interfaces[interfaces_count];
+	u2             fields_count;
+	field_info     fields[fields_count];
+	u2             methods_count;
+	method_info    methods[methods_count];
+	u2 			   attributes_count;
+	attribute_info attributes[attributes_count];
+}
+```
+
+#### 1.1 魔数
+
+0~3 字节，表示它是否是【class】类型的文件 
+
+0000000 <font color="red">ca fe ba be</font> 00 00 00 34 00 23 0a 00 06 00 15 09
+
+#### 1.2 版本
+
+4~7 字节，表示类的版本
+
+0000000 ca fe ba be <font color="red">00 00 00 34</font> 00 23 0a 00 06 00 15 09
+
+00 00 ---表示小版本
+00 34 ---主版本，表示52，代表JDK8
+
+#### 1.3 常量池
+
+![image-20230806143304555](https://img.enndfp.cn/image-20230806143304555.png)
+
+#### 1.4 访问标识与继承信息
+
+![image-20230806143529604](https://img.enndfp.cn/image-20230806143529604.png)
+
+#### 1.5 Field 信息
+
+![image-20230806143647191](https://img.enndfp.cn/image-20230806143647191.png)
+
+#### 1.6 Method 信息
+
+![image-20230806143805632](https://img.enndfp.cn/image-20230806143805632.png)
+
+### 2.类加载阶段
+
