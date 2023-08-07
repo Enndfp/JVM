@@ -1343,3 +1343,95 @@ ClassFile {
 
 ### 2.类加载阶段
 
+#### 2.1 加载
+
+- 将类的字节码载入方法区中，内部采用 C++ 的 instanceKlass 描述 java 类，它的重要 field 有：
+  - _java_mirror 即 java 的类镜像，例如对 String 来说，就是 String.class，作用是把 klass 暴露给 java 使用
+  - _super 即父类 
+  - _fields 即成员变量 
+  - _methods 即方法 
+  - _constants 即常量池 
+  - _class_loader 即类加载器 
+  - _vtable 虚方法表 
+  - _itable 接口方法表
+- 如果这个类还有父类没有加载，先加载父类
+- **加载**和**连接**可能是交替运行的
+
+**注意：**
+
+- instanceKlass 这样的【元数据】是存储在方法区（1.8 后的元空间内），但 _java_mirror 是存储在堆中
+- 可以通过前面介绍的 HSDB 工具查看
+
+![image-20230807104845967](https://img.enndfp.cn/image-20230807104845967.png)
+
+#### 2.2 验证
+
+验证类是否符合 JVM规范，安全性检查，大致分为以下四个阶段：
+
+- 文件格式验证
+- 元数据验证
+- 字节码验证
+- 符号引用验证
+
+#### 2.3 准备
+
+为static变量分配空间，设置默认值
+
+- static 变量在 JDK 7 之前存储于 instanceKlass 末尾，从 JDK 7 开始，存储于 _java_mirror 末尾
+- static 变量分配空间和赋值是两个步骤，分配空间在准备阶段完成，赋值在初始化阶段完成
+- 如果 static 变量是 final 的基本类型，以及字符串常量，那么编译阶段值就确定了，赋值在准备阶段完成
+- 如果 static 变量是 final 的，但属于引用类型（new），那么赋值也会在初始化阶段完成
+
+#### 2.4 解析
+
+将常量池中的符号引用解析为直接引用
+
+```java
+/**
+ * 解析的含义
+ *
+ * @author Enndfp
+ */
+public class Demo1 {
+
+    public static void main(String[] args) throws Exception {
+        ClassLoader classLoader = Demo1.class.getClassLoader();
+        // loadClass 方法不会导致类的解析和初始化
+        Class<?> c = classLoader.loadClass("com.enndfp.class_loader_test.C");
+
+        // new C();
+        System.in.read();
+    }
+}
+
+class C {
+    D d = new D();
+}
+
+class D {
+
+}
+```
+
+#### 2.5 初始化
+
+`<clinit>()`方法
+
+初始化即调用`<clinit>()` ，虚拟机会保证这个类的『构造方法』的线程安全
+
+##### 2.5.1 会发生初始化
+
+- main 方法所在的类，总会被首先初始化
+- 首次访问这个类的静态变量或静态方法时
+- 子类初始化，如果父类还没初始化，会引发
+- 子类访问父类的静态变量，只会触发父类的初始化
+- Class.forName
+- new 会导致初始化
+
+##### 2.5.2 不会发生初始化
+
+- 访问类的 static final 静态常量（基本类型和字符串）不会触发初始化
+- 类对象.class 不会触发初始化
+- 创建该类的数组不会触发初始化
+- 类加载器的 loadClass 方法
+- Class.forName 的参数 2 为 false 时
