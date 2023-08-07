@@ -221,9 +221,9 @@ public class Demo4 {
 
 ![image-20230802111912156](https://img.enndfp.cn/image-20230802111912156.png)
 
-#### 3.2 注意
-
-**程序计数器和栈都是线程私有的**
+> **注意**
+>
+> 程序计数器和栈都是线程私有的
 
 ### 4.堆
 
@@ -1076,11 +1076,13 @@ Garbage First 将堆划分大小相等的一个个区域，**每个区域都可�
 
 2、Minor GC后存活的对象超过了老年代剩余空间
 
-注意GC日志中是否有`promotion failed`和`concurrent mode failure`两种状况，当出现这两种状况的时候就有可能会触发Full GC。
-
-- promotion failed 是在进行 Minor GC时候，survivor space空间放不下只能晋升老年代，而此时老年代也空间不足时发生的。
-
-- concurrent mode failure 是在进行CMS GC过程，此时有对象要放入老年代而空间不足造成的，这种情况下会退化使用Serial Old收集器变成单线程的，此时是相当的慢的。
+>**注意**
+>
+>GC日志中是否有`promotion failed`和`concurrent mode failure`两种状况，当出现这两种状况的时候就有可能会触发Full GC。
+>
+>- promotion failed 是在进行 Minor GC时候，survivor space空间放不下只能晋升老年代，而此时老年代也空间不足时发生的。
+>
+>- concurrent mode failure 是在进行CMS GC过程，此时有对象要放入老年代而空间不足造成的，这种情况下会退化使用Serial Old收集器变成单线程的，此时是相当的慢的。
 
 **5. JDK 1.7 及以前的（永久代）空间满**
 
@@ -1094,7 +1096,7 @@ Garbage First 将堆划分大小相等的一个个区域，**每个区域都可�
 
 ------
 
-**空间分配担保补充：**
+<mark>**空间分配担保补充**</mark>
 
 **在发生Minor GC之前，虚拟机必须先检查老年代最大可用的连续空间是否大于新生代所有对象总空间，如果这个条件成立，那这一次Minor GC可以确保是安全的。如果不成立，则虚拟机会先查看-XX：HandlePromotionFailure参数的设置值是否允许担保失败（Handle Promotion Failure）；如果允许，那会继续检查老年代最大可用的连续空间是否大于历次晋升到老年代对象的平均大小，如果大于，将尝试进行一次Minor GC，尽管这次Minor GC是有风险的；如果小于，或者-XX： HandlePromotionFailure设置不允许冒险，那这时就要改为进行一次Full GC。**
 
@@ -1346,7 +1348,7 @@ ClassFile {
 #### 2.1 加载
 
 - 将类的字节码载入方法区中，内部采用 C++ 的 instanceKlass 描述 java 类，它的重要 field 有：
-  - _java_mirror 即 java 的类镜像，例如对 String 来说，就是 String.class，作用是把 klass 暴露给 java 使用
+  - _java_mirror 即 java 的类镜像，例如对 String 来说，就是 String.class，作用是把 instanceKlass 暴露给 java 使用
   - _super 即父类 
   - _fields 即成员变量 
   - _methods 即方法 
@@ -1435,3 +1437,259 @@ class D {
 - 创建该类的数组不会触发初始化
 - 类加载器的 loadClass 方法
 - Class.forName 的参数 2 为 false 时
+
+实验
+
+```java
+class A {
+    static int a = 0;
+
+    static {
+        System.out.println("a init");
+    }
+}
+
+class B extends A {
+    final static double b = 5.0;
+    static boolean c = false;
+
+    static {
+        System.out.println("b init");
+    }
+}
+```
+
+验证（实验时请先全部注释，每次只执行其中一个）
+
+```java
+public class Demo2 {
+    static {
+        System.out.println("main init");
+    }
+
+    public static void main(String[] args) throws ClassNotFoundException {
+        // 1. 静态常量（基本类型和字符串）不会触发初始化
+        System.out.println(B.b);
+        // 2. 类对象.class 不会触发初始化
+        System.out.println(B.class);
+        // 3. 创建该类的数组不会触发初始化
+        System.out.println(new B[0]);
+        // 4. 不会初始化类 B，但会加载 B、A
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        cl.loadClass("com.enndfp.class_loader_test.B");
+        // 5. 不会初始化类 B，但会加载 B、A
+        ClassLoader c2 = Thread.currentThread().getContextClassLoader();
+        Class.forName("com.enndfp.class_loader_test.B", false, c2);
+
+        // 1. 首次访问这个类的静态变量或静态方法时
+        System.out.println(A.a);
+        // 2. 子类初始化，如果父类还没初始化，会引发
+        System.out.println(B.c);
+        // 3. 子类访问父类静态变量，只触发父类初始化
+        System.out.println(B.a);
+        // 4. 会初始化类 B，并先初始化类 A
+        Class.forName("com.enndfp.class_loader_test.B");
+    }
+}
+```
+
+### 3.类加载器
+
+#### 3.1 基本介绍
+
+Java虚拟机设计团队有意把类加载阶段中的“通过一个类的**全限定名**来获取描述该类的**二进制字节流**”**这个动作放到 Java 虚拟机外部去实现，以便让应用程序自己决定如何去获取所需的类。实现这个动作的代码**被称为“类加载器”（**Class Loader**）
+
+**类与类加载器**
+
+类加载器虽然只用于实现类的加载动作，但它在 Java 程序中起到的作用却远超类加载阶段。
+
+对于任意一个类，都必须由加载它的**类加载器**和这个**类本身**一起共同确立其在 Java 虚拟机中的唯一性，每一个类加载器，都拥有一个独立的类名称空间。这句话可以表达得更通俗一些：**比较两个类是否“相等”，只有在这两个类是由同一个类加载器加载的前提下才有意义**，否则，即使这两个类来源于同一个 Class文件，被同一个Java虚拟机加载，只要加载它们的类加载器不同，那这两个类就必定不相等。
+
+| 名称                    | 加载哪的类            | 说明                          |
+| ----------------------- | --------------------- | ----------------------------- |
+| Bootstrap ClassLoader   | JAVA_HOME/jre/lib     | 无法直接访问                  |
+| Extension ClassLoader   | JAVA_HOME/jre/lib/ext | 上级为 Bootstrap，显示为 null |
+| Application ClassLoader | classpath             | 上级为 Extension              |
+| 自定义类加载器          | 自定义                | 上级为 Application            |
+
+**<mark>第一遍自下而上询问有没有加载，第二遍自上而下看自己加载目录有没有，如果有，则加载；没有，则看下一级加载器</mark>**
+
+#### 3.2 启动类加载器
+
+用 Bootstrap 类加载器加载类：
+
+```java
+package com.enndfp.class_loader_test;
+
+public class F {
+    static {
+        System.out.println("bootstrap F init");
+    }
+}
+```
+
+执行
+
+```java
+package com.enndfp.class_loader_test;
+
+/**
+ * 验证启动类加载器
+ *
+ * @author Enndfp
+ */
+public class Demo3 {
+    public static void main(String[] args) throws ClassNotFoundException {
+        Class<?> aClass = Class.forName("com.enndfp.class_loader_test.F");
+        System.out.println(aClass.getClassLoader());
+    }
+}
+```
+
+输出
+
+![image-20230807195058751](https://img.enndfp.cn/image-20230807195058751.png)
+
+- -Xbootclasspath 表示设置 bootclasspath
+- 其中 /a:. 表示将当前目录追加至 bootclasspath 之后
+- 可以用这个办法替换核心类
+  - `java -Xbootclasspath:<new bootclasspath>`
+  - `java -Xbootclasspath/a:<追加路径>`
+  - `java -Xbootclasspath/p:<追加路径>`
+
+#### 3.3 扩展类加载器
+
+```java
+package com.enndfp.class_loader_test;
+
+public class G {
+    static {
+        System.out.println("classpath G init");
+    }
+}
+```
+
+执行
+
+```java
+/**
+ * 验证扩展类加载器
+ *
+ * @author Enndfp
+ */
+public class Demo4 {
+    public static void main(String[] args) throws ClassNotFoundException {
+        Class<?> aClass = Class.forName("com.enndfp.class_loader_test.G");
+        System.out.println(aClass.getClassLoader());
+    }
+}
+```
+
+输出
+
+![image-20230807200524225](https://img.enndfp.cn/image-20230807200524225.png)
+
+写一个同名的类
+
+```java
+package com.enndfp.class_loader_test;
+
+public class G {
+    static {
+        System.out.println("ext G init");
+    }
+}
+```
+
+打个 jar 包
+
+![image-20230807200818538](https://img.enndfp.cn/image-20230807200818538.png)
+
+将 jar 包拷贝到 JAVA_HOME/jre/lib/ext
+
+重新执行 Demo4 
+
+输出
+
+![image-20230807201425883](https://img.enndfp.cn/image-20230807201425883.png)
+
+#### 3.4 双亲委派模式
+
+**工作流程：**
+
+<mark>如果一个类加载器收到了类加载的请求，它首先不会自己去尝试加载这个类，而是把这个请求委派给父类加载器去完成，每一个层次的类加载器都是如此，因此所有的加载请求最终都应该传送到最顶层的启动类加载器中，只有当父加载器反馈自己无法完成这个加载请求（它的搜索范围中没有找到所需的类）时，子加载器才会尝试自己去完成加载</mark>
+
+所谓的双亲委派，就是指调用类加载器的 **loadClass** 方法时，查找类的规则
+
+> **注意**
+>
+> 这里的双亲，翻译为上级似乎更为合适，因为它们并没有继承关系
+
+```java
+protected Class<?> loadClass(String name, boolean resolve)
+        throws ClassNotFoundException
+    {
+        synchronized (getClassLoadingLock(name)) {
+            // 1. 检查该类是否已经加载
+            Class<?> c = findLoadedClass(name);
+            if (c == null) {
+                long t0 = System.nanoTime();
+                try {
+                    if (parent != null) {
+                        // 2. 有上级的话，委派上级 loadClass
+                        c = parent.loadClass(name, false);
+                    } else {
+                        // 3. 如果没有上级了（ExtClassLoader），则委派BootstrapClassLoader
+                        c = findBootstrapClassOrNull(name);
+                    }
+                } catch (ClassNotFoundException e) {
+                    //若找不到，抛出ClassNotFoundException异常
+                }
+
+                if (c == null) {
+                    long t1 = System.nanoTime();
+                    // 4. 每一层找不到，调用 findClass 方法（每个类加载器自己扩展）来加载
+                    c = findClass(name);
+
+                    // 5. 记录耗时
+                    sun.misc.PerfCounter.getParentDelegationTime().addTime(t1 - t0);
+                    sun.misc.PerfCounter.getFindClassTime().addElapsedTimeFrom(t1);
+                    sun.misc.PerfCounter.getFindClasses().increment();
+                }
+            }
+            if (resolve) {
+                resolveClass(c);
+            }
+            return c;
+        }
+    }
+```
+
+例如：
+
+```java
+/**
+ * 验证双亲委派模型加载过程
+ *
+ * @author Enndfp
+ */
+public class Demo5 {
+    public static void main(String[] args) throws ClassNotFoundException {
+        Class<?> aClass = Demo5.class.getClassLoader().loadClass("com.enndfp.class_loader_test.H");
+        System.out.println(aClass.getClassLoader());
+    }
+}
+```
+
+执行流程为：
+
+1. `sun.misc.Launcher$AppClassLoader`  //1 处，开始查看已加载的类，结果没有
+2.  `sun.misc.Launcher$AppClassLoader` // 2 处，委派上级
+
+​        `sun.misc.Launcher$ExtClassLoader.loadClass()`
+
+3. `sun.misc.Launcher$ExtClassLoader` // 1 处，查看已加载的类，结果没有
+4. `sun.misc.Launcher$ExtClassLoader` // 3 处，没有上级了，则委派 `BootstrapClassLoader` 查找
+5. `BootstrapClassLoader` 是在 JAVA_HOME/jre/lib 下找 H 这个类，显然没有
+6. `sun.misc.Launcher$ExtClassLoader` // 4 处，调用自己的 findClass 方法，是在 JAVA_HOME/jre/lib/ext 下找 H 这个类，显然没有，回到 `sun.misc.Launcher$AppClassLoader` 的 // 2 处
+7. 继续执行到 `sun.misc.Launcher$AppClassLoader` // 4 处，调用它自己的 findClass 方法，在 classpath 下查找，找到了
