@@ -1613,7 +1613,7 @@ public class G {
 
 ![image-20230807201425883](https://img.enndfp.cn/image-20230807201425883.png)
 
-#### 3.4 双亲委派模式
+#### 3.4 双亲委派模型
 
 **工作流程：**
 
@@ -1693,3 +1693,86 @@ public class Demo5 {
 5. `BootstrapClassLoader` 是在 JAVA_HOME/jre/lib 下找 H 这个类，显然没有
 6. `sun.misc.Launcher$ExtClassLoader` // 4 处，调用自己的 findClass 方法，是在 JAVA_HOME/jre/lib/ext 下找 H 这个类，显然没有，回到 `sun.misc.Launcher$AppClassLoader` 的 // 2 处
 7. 继续执行到 `sun.misc.Launcher$AppClassLoader` // 4 处，调用它自己的 findClass 方法，在 classpath 下查找，找到了
+
+**优势：**
+
+1. 避免类被重复加载，确保类的全局唯一性
+2. 保护程序安全，防止核心api被随意篡改
+
+**弊端：**
+
+1. 由于加载范围的限制，顶层的ClassLoader无法访问底层的ClassLoader所加载的类
+
+#### 3.5 破坏双亲委派模型
+
+##### **第一次破坏**
+
+在 jdk 1.2 之前，那时候还没有双亲委派模型，不过已经有了 ClassLoader 这个抽象类，所以已经有人继承这个抽象类，重写 loadClass 方法来实现用户自定义类加载器。
+
+而在 1.2 的时候要引入双亲委派模型，**为了向前兼容**， loadClass 这个方法还得保留着使之得以重写，新搞了个 findClass 方法让用户去重写，并呼吁大家不要重写 loadClass 只要重写 findClass。
+
+**这就是第一次对双亲委派模型的破坏**，因为双亲委派的逻辑在 loadClass 上，但是又允许重写 loadClass，重写了之后就可以破坏委派逻辑了。
+
+##### 第二次破坏
+
+双亲委派模型的第二次破坏是由其**自身的缺陷引起的**，为了解决基础类型调用用户代码的问题
+
+引入了**线程上下文类加载器**，通过`setContextClassLoader()`默认情况就是应用程序类加载器，然后利用`Thread.currentThread().getContextClassLoader()`获得类加载器来加载
+
+虽然违背了双亲委派模型的原则，但在特定情况下是必要的。后来，在JDK 6时，JDK提供了`java.util.ServiceLoader`类，以META-INF/services中的配置信息，辅以责任链模式
+
+##### 第三次破坏
+
+双亲委派模型的第三次破坏是由于**用户对程序动态性的追求**而导致的，这里所说的“动态性”指的是一些非常“热”门的名词：代码热替换（Hot Swap）、模块热部署（Hot Deployment）等。
+
+OSGI 就是利用自定义的类加载器机制来完成模块化热部署，而它实现的类加载机制就没有完全遵循自下而上的委托，有很多平级之间的类加载器查找
+
+#### 3.6 自定义类加载器
+
+##### 3.6.1 使用场景
+
+- 想加载非 classpath 随意路径中的类文件
+- 都是通过接口来使用实现，希望解耦时，常用在框架设计
+- 这些类希望予以隔离，不同应用的同名类都可以加载，不冲突，常见于 tomcat 容器
+
+##### 3.6.2 步骤
+
+1. 继承 ClassLoader 父类
+2. 要遵从双亲委派机制，重写 findClass 方法
+   - 注意不是重写 loadClass 方法，否则不会走双亲委派机制
+3. 读取类文件的字节码
+4. 调用父类的 defineClass 方法来加载类
+5. 使用者调用该类加载器的 loadClass 方法
+
+```java
+/**
+ * 自定义类加载器
+ *
+ * @author Enndfp
+ */
+public class MyClassLoader extends ClassLoader {
+    /**
+     * @param name 类名称
+     */
+    @Override
+    protected Class<?> findClass(String name) throws ClassNotFoundException {
+        String path = "D:\\myclasspath\\" + name + ".class";
+
+        try {
+            ByteArrayOutputStream os = new ByteArrayOutputStream();
+            Files.copy(Paths.get(path), os);
+
+            // 得到字节数组
+            byte[] bytes = os.toByteArray();
+
+            // byte[] -> *.class
+            return defineClass(name, bytes, 0, bytes.length);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new ClassNotFoundException("类文件未找到", e);
+        }
+    }
+}
+```
+
